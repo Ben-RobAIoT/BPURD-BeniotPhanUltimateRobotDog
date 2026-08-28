@@ -1,0 +1,120 @@
+import os
+import subprocess
+import cv2
+import numpy as np
+import threading
+from flask import Flask, Response
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+
+app = Flask(__name__)
+# Biến toàn cục lưu trữ frame mới nhất để Flask lấy
+current_frame_jpeg = None
+
+class CameraRosNode(Node):
+    def __init__(self):
+        super().__init__('fdamr_camera_node')
+        # Topic này sẽ đẩy ảnh lên cho RViz2 và AI
+        self.publisher_ = self.create_publisher(Image, '/camera/image_raw', 10)
+        self.bridge = CvBridge()
+        self.get_logger().info("Đã khởi tạo ROS 2 Publisher cho Camera Pi V3")
+
+    def publish_frame(self, frame_bgr):
+        # Chuyển đổi OpenCV frame sang ROS 2 Image Message
+        ros_image = self.bridge.cv2_to_imgmsg(frame_bgr, encoding="bgr8")
+        ros_image.header.stamp = self.get_clock().now().to_msg()
+        ros_image.header.frame_id = "camera_link" # Đồng bộ với URDF
+        self.publisher_.publish(ros_image)
+
+def read_exactly(pipe, size):
+    data = b''
+    while len(data) < size:
+        chunk = pipe.read(size - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+
+def camera_capture_loop(ros_node):
+    global current_frame_jpeg
+    
+    cmd = [
+        "gst-launch-1.0", "-q",
+        "libcamerasrc", "!",
+        "video/x-raw,width=640,height=480,framerate=20/1", "!",
+        "videoconvert", "!",
+        "video/x-raw,format=RGB", "!",
+        "fdsink", "fd=1"
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    frame_size = 640 * 480 * 3 
+
+    try:
+        while rclpy.ok():
+            raw_data = read_exactly(process.stdout, frame_size)
+            if not raw_data:
+                ros_node.get_logger().error("Luồng camera bị ngắt.")
+                break
+
+            frame = np.frombuffer(raw_data, dtype=np.uint8).reshape((480, 640, 3))
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+            # 1. Bắn lên ROS 2
+            ros_node.publish_frame(frame_bgr)
+
+            # 2. Cập nhật biến toàn cục cho Flask (HTTP Stream)
+            ret, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            current_frame_jpeg = buffer.tobytes()
+
+    finally:
+        process.terminate()
+
+def generate_frames_for_flask():
+    global current_frame_jpeg
+    while True:
+        if current_frame_jpeg is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + current_frame_jpeg + b'\r\n')
+
+@app.route('/')
+def video_feed():
+    return Response(generate_frames_for_flask(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+def run_flask():
+    # Tắt log của Werkzeug để terminal đỡ rối
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
+
+def main(args=None):
+    rclpy.init(args=args)
+    ros_node = CameraRosNode()
+
+    # Chạy luồng GStreamer + ROS 2
+    capture_thread = threading.Thread(target=camera_capture_loop, args=(ros_node,))
+    capture_thread.daemon = True
+    capture_thread.start()
+
+    # Chạy luồng Flask Web Server
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    try:
+        rclpy.spin(ros_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        ros_node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    print("========== HỆ THỐNG MẮT THẦN ĐÃ SẴN SÀNG ==========")
+    print("- Đang phát ROS Topic: /camera/image_raw")
+    print("- Đang phát HTTP IP: http://<IP>:5000")
+    print("===================================================")
+    main()
