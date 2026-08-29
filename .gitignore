@@ -1,0 +1,10 @@
+# Bỏ qua các thư mục biên dịch của ROS 2
+build/
+install/
+log/
+src/
+
+# Bỏ qua các file rác của hệ điều hành
+.DS_Store
+*.swp
+*~

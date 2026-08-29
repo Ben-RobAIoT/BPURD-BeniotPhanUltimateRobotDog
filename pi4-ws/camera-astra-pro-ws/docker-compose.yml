@@ -1,0 +1,20 @@
+services:
+  astra_pro_node:
+    platform: linux/arm64
+    build: .
+    container_name: astra_pro_humble
+    restart: unless-stopped
+    privileged: true
+    network_mode: "host"
+    environment:
+      - ROS_DOMAIN_ID=30
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - /dev:/dev
+    working_dir: /ros2_ws
+    command: >
+      /bin/bash -c "
+      source /opt/ros/humble/setup.bash &&
+      source /ros2_ws/install/setup.bash &&
+      ros2 launch astra_camera astra_pro.launch.xml
+      "
