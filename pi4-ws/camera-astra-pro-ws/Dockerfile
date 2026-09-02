@@ -33,3 +33,7 @@ RUN /bin/bash -c "source /opt/ros/humble/setup.bash && colcon build --symlink-in
 # Tự động nạp môi trường cho mỗi lần chui vào container
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 RUN echo "source /ros2_ws/install/setup.bash" >> ~/.bashrc
+# Cài đặt trình quản lý gói pip của Python
+RUN apt-get update && apt-get install -y python3-pip
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt

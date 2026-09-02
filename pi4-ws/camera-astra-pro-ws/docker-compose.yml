@@ -11,6 +11,7 @@ services:
     volumes:
       - /dev/bus/usb:/dev/bus/usb
       - /dev:/dev
+      - .:/ros2_ws/vision_apps
     working_dir: /ros2_ws
     command: >
       /bin/bash -c "
